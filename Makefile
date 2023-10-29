@@ -28,11 +28,15 @@ endif
 # Windows cross compilation from Linux
 #CONFIG_WIN32=y
 # use link time optimization (smaller and faster executables but slower build)
+ifndef CONFIG_VITA
 CONFIG_LTO=y
+endif
 # consider warnings as errors (for development)
 #CONFIG_WERROR=y
 # force 32 bit build for some utilities
 #CONFIG_M32=y
+# compile for PSVita using vitasdk
+#CONFIG_VITA=y
 
 ifdef CONFIG_DARWIN
 # use clang instead of gcc
@@ -41,7 +45,11 @@ CONFIG_DEFAULT_AR=y
 endif
 
 # installation directory
+ifdef CONFIG_VITA
+prefix=$(VITASDK)/arm-vita-eabi
+else
 prefix=/usr/local
+endif
 
 # use the gprof profiler
 #CONFIG_PROFILE=y
@@ -85,6 +93,18 @@ ifdef CONFIG_CLANG
     endif
   endif
 else
+ifdef CONFIG_VITA
+  PREFIX = arm-vita-eabi-
+  CC           = $(PREFIX)gcc
+  AR           = $(PREFIX)ar
+  CFLAGS       = -g -Wl,-q -O3 -ffast-math -mtune=cortex-a9 -mfpu=neon -Wno-incompatible-pointer-types -Wno-stringop-overflow -Wno-array-bounds -Wno-format-truncation
+  HOST_CC      = gcc
+  ifdef CONFIG_LTO
+    AR=$(CROSS_PREFIX)gcc-ar
+  else
+    AR=$(CROSS_PREFIX)ar
+  endif
+else
   HOST_CC=gcc
   CC=$(CROSS_PREFIX)gcc
   CFLAGS=-g -Wall -MMD -MF $(OBJDIR)/$(@F).d
@@ -94,6 +114,7 @@ else
   else
     AR=$(CROSS_PREFIX)ar
   endif
+endif
 endif
 STRIP=$(CROSS_PREFIX)strip
 ifdef CONFIG_WERROR
@@ -105,6 +126,12 @@ DEFINES+=-DCONFIG_BIGNUM
 endif
 ifdef CONFIG_WIN32
 DEFINES+=-D__USE_MINGW_ANSI_STDIO # for standard snprintf behavior
+endif
+ifdef CONFIG_VITA
+DEFINES+=-DCONFIG_VITA
+endif
+ifdef VITA_USE_DEBUGSCREEN
+DEFINES+=-DVITA_USE_DEBUGSCREEN
 endif
 
 CFLAGS+=$(DEFINES)
@@ -129,10 +156,19 @@ endif
 ifdef CONFIG_WIN32
 LDEXPORT=
 else
+ifdef CONFIG_VITA
+LDEXPORT=
+else
 LDEXPORT=-rdynamic
 endif
+endif
 
+ifdef CONFIG_VITA
+# Executables are not compiled, only libraries
+PROGS=
+else
 PROGS=qjs$(EXE) qjsc$(EXE) run-test262
+endif
 ifneq ($(CROSS_PREFIX),)
 QJSC_CC=gcc
 QJSC=./host-qjsc
@@ -142,7 +178,9 @@ QJSC_CC=$(CC)
 QJSC=./qjsc$(EXE)
 endif
 ifndef CONFIG_WIN32
+ifndef CONFIG_VITA
 PROGS+=qjscalc
+endif
 endif
 ifdef CONFIG_M32
 PROGS+=qjs32 qjs32_s
@@ -153,6 +191,7 @@ PROGS+=libquickjs.lto.a
 endif
 
 # examples
+ifndef CONFIG_VITA
 ifeq ($(CROSS_PREFIX),)
 ifdef CONFIG_ASAN
 PROGS+=
@@ -163,21 +202,31 @@ PROGS+=examples/fib.so examples/point.so
 endif
 endif
 endif
+endif
 
 all: $(OBJDIR) $(OBJDIR)/quickjs.check.o $(OBJDIR)/qjs.check.o $(PROGS)
 
 QJS_LIB_OBJS=$(OBJDIR)/quickjs.o $(OBJDIR)/libregexp.o $(OBJDIR)/libunicode.o $(OBJDIR)/cutils.o $(OBJDIR)/quickjs-libc.o
 
+ifndef CONFIG_VITA
 QJS_OBJS=$(OBJDIR)/qjs.o $(OBJDIR)/repl.o $(QJS_LIB_OBJS)
+else
+QJS_OBJS=$(OBJDIR)/qjs.o $(QJS_LIB_OBJS)
+endif
 ifdef CONFIG_BIGNUM
 QJS_LIB_OBJS+=$(OBJDIR)/libbf.o 
 QJS_OBJS+=$(OBJDIR)/qjscalc.o
 endif
 
+ifdef CONFIG_VITA
+HOST_LIBS=-lm -ldl -lpthread
+LIBS=-lc -lm -ldl -Wl,--whole-archive -lpthread -Wl,--no-whole-archive -ltaihen_stub -lSceSblSsMgr_stub
+else
 HOST_LIBS=-lm -ldl -lpthread
 LIBS=-lm
 ifndef CONFIG_WIN32
 LIBS+=-ldl -lpthread
+endif
 endif
 LIBS+=$(EXTRA_LIBS)
 
@@ -234,11 +283,14 @@ libquickjs.a: $(patsubst %.o, %.nolto.o, $(QJS_LIB_OBJS))
 	$(AR) rcs $@ $^
 endif # CONFIG_LTO
 
+# No examples compiled
+ifndef CONFIG_VITA
 repl.c: $(QJSC) repl.js
 	$(QJSC) -c -o $@ -m repl.js
 
 qjscalc.c: $(QJSC) qjscalc.js
 	$(QJSC) -fbignum -c -o $@ qjscalc.js
+endif
 
 ifneq ($(wildcard unicode/UnicodeData.txt),)
 $(OBJDIR)/libunicode.o $(OBJDIR)/libunicode.m32.o $(OBJDIR)/libunicode.m32s.o \
@@ -298,10 +350,12 @@ clean:
 	rm -rf run-test262-debug run-test262-32
 
 install: all
+ifndef CONFIG_VITA
 	mkdir -p "$(DESTDIR)$(prefix)/bin"
 	$(STRIP) qjs qjsc
 	install -m755 qjs qjsc "$(DESTDIR)$(prefix)/bin"
 	ln -sf qjs "$(DESTDIR)$(prefix)/bin/qjscalc"
+endif
 	mkdir -p "$(DESTDIR)$(prefix)/lib/quickjs"
 	install -m644 libquickjs.a "$(DESTDIR)$(prefix)/lib/quickjs"
 ifdef CONFIG_LTO
