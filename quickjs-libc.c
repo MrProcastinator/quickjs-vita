@@ -43,8 +43,10 @@
 #include <utime.h>
 #else
 #include <dlfcn.h>
+#if !defined(__vita__)
 #include <termios.h>
 #include <sys/ioctl.h>
+#endif
 #include <sys/wait.h>
 
 #if defined(__APPLE__)
@@ -77,6 +79,19 @@ __END_DECLS
 #include "cutils.h"
 #include "list.h"
 #include "quickjs-libc.h"
+
+#if !defined(__vita__)
+#define HAVE_TTY
+#endif
+
+#if defined(__vita__)
+#define PATH_MAX 1024
+
+#if defined(VITA_USE_DEBUGSCREEN)
+int psvDebugScreenPuts(const char * _text);
+int psvDebugScreenPrintf(const char *format, ...);
+#endif
+#endif
 
 /* TODO:
    - add socket calls
@@ -805,9 +820,11 @@ static void js_std_file_finalizer(JSRuntime *rt, JSValue val)
     JSSTDFile *s = JS_GetOpaque(val, js_std_file_class_id);
     if (s) {
         if (s->f && s->close_in_finalizer) {
+#if !defined(__vita__)
             if (s->is_popen)
                 pclose(s->f);
             else
+#endif
                 fclose(s->f);
         }
         js_free_rt(rt, s);
@@ -909,6 +926,7 @@ static JSValue js_std_open(JSContext *ctx, JSValueConst this_val,
     return JS_EXCEPTION;
 }
 
+#if !defined(__vita__)
 static JSValue js_std_popen(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
@@ -944,6 +962,7 @@ static JSValue js_std_popen(JSContext *ctx, JSValueConst this_val,
     JS_FreeCString(ctx, mode);
     return JS_EXCEPTION;
 }
+#endif
 
 static JSValue js_std_fdopen(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
@@ -1049,9 +1068,11 @@ static JSValue js_std_file_close(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (!s->f)
         return JS_ThrowTypeError(ctx, "invalid file handle");
+#if !defined(__vita__)
     if (s->is_popen)
         err = js_get_errno(pclose(s->f));
     else
+#endif
         err = js_get_errno(fclose(s->f));
     s->f = NULL;
     return JS_NewInt32(ctx, err);
@@ -1319,6 +1340,7 @@ static int http_get_status(const char *buf)
     return atoi(p);
 }
 
+#if !defined(__vita__)
 static JSValue js_std_urlGet(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
@@ -1465,6 +1487,7 @@ static JSValue js_std_urlGet(JSContext *ctx, JSValueConst this_val,
     JS_FreeValue(ctx, response);
     return JS_EXCEPTION;
 }
+#endif
 
 static JSClassDef js_std_file_class = {
     "FILE",
@@ -1497,14 +1520,18 @@ static const JSCFunctionListEntry js_std_funcs[] = {
     JS_CFUNC_DEF("setenv", 1, js_std_setenv ),
     JS_CFUNC_DEF("unsetenv", 1, js_std_unsetenv ),
     JS_CFUNC_DEF("getenviron", 1, js_std_getenviron ),
+#if !defined(__vita__)
     JS_CFUNC_DEF("urlGet", 1, js_std_urlGet ),
+#endif
     JS_CFUNC_DEF("loadFile", 1, js_std_loadFile ),
     JS_CFUNC_DEF("strerror", 1, js_std_strerror ),
     JS_CFUNC_DEF("parseExtJSON", 1, js_std_parseExtJSON ),
     
     /* FILE I/O */
     JS_CFUNC_DEF("open", 2, js_std_open ),
+#if !defined(__vita__)
     JS_CFUNC_DEF("popen", 2, js_std_popen ),
+#endif
     JS_CFUNC_DEF("fdopen", 2, js_std_fdopen ),
     JS_CFUNC_DEF("tmpfile", 0, js_std_tmpfile ),
     JS_CFUNC_MAGIC_DEF("puts", 1, js_std_file_puts, 0 ),
@@ -1668,10 +1695,14 @@ static JSValue js_os_read_write(JSContext *ctx, JSValueConst this_val,
 static JSValue js_os_isatty(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv)
 {
+#ifdef HAVE_TTY
     int fd;
     if (JS_ToInt32(ctx, &fd, argv[0]))
         return JS_EXCEPTION;
     return JS_NewBool(ctx, (isatty(fd) != 0));
+#else
+    return JS_NewBool(ctx, 0);
+#endif
 }
 
 #if defined(_WIN32)
@@ -1718,7 +1749,7 @@ static JSValue js_os_ttySetRaw(JSContext *ctx, JSValueConst this_val,
     }
     return JS_UNDEFINED;
 }
-#else
+#elif defined(HAVE_TTY)
 static JSValue js_os_ttyGetWinSize(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv)
 {
@@ -1776,7 +1807,23 @@ static JSValue js_os_ttySetRaw(JSContext *ctx, JSValueConst this_val,
     atexit(term_exit);
     return JS_UNDEFINED;
 }
+#else
+static JSValue js_os_ttyGetWinSize(JSContext *ctx, JSValueConst this_val,
+                                   int argc, JSValueConst *argv)
+{
+    return JS_NULL;
+}
 
+static void term_exit(void)
+{
+    
+}
+
+static JSValue js_os_ttySetRaw(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv)
+{
+    return JS_UNDEFINED;
+}
 #endif /* !_WIN32 */
 
 static JSValue js_os_remove(JSContext *ctx, JSValueConst this_val,
@@ -1977,6 +2024,13 @@ static int64_t get_time_ms(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
+}
+#elif defined(__vita__)
+static int64_t get_time_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
 }
 #else
 /* more portable, but does not work if the date is updated */
@@ -2585,7 +2639,7 @@ static JSValue js_os_stat(JSContext *ctx, JSValueConst this_val,
                                   JS_NewInt64(ctx, st.st_blocks),
                                   JS_PROP_C_W_E);
 #endif
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__vita__)
         JS_DefinePropertyValueStr(ctx, obj, "atime",
                                   JS_NewInt64(ctx, (int64_t)st.st_atime * 1000),
                                   JS_PROP_C_W_E);
@@ -2691,6 +2745,15 @@ static JSValue js_os_sleep(JSContext *ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, ret);
 }
 
+/* time() */
+static JSValue js_os_time(JSContext *ctx, JSValueConst this_val,
+                          int argc, JSValueConst *argv)
+{
+    time_t seconds;
+    seconds = time(NULL);
+    return JS_NewInt32(ctx, seconds);
+}
+
 #if defined(_WIN32)
 static char *realpath(const char *path, char *buf)
 {
@@ -2725,7 +2788,7 @@ static JSValue js_os_realpath(JSContext *ctx, JSValueConst this_val,
     return make_string_error(ctx, buf, err);
 }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__vita__)
 static JSValue js_os_symlink(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
 {
@@ -3622,6 +3685,8 @@ void js_std_set_worker_new_context_func(JSContext *(*func)(JSRuntime *rt))
 #define OS_PLATFORM "win32"
 #elif defined(__APPLE__)
 #define OS_PLATFORM "darwin"
+#elif defined(__vita__)
+#define OS_PLATFORM "vita"
 #elif defined(EMSCRIPTEN)
 #define OS_PLATFORM "js"
 #else
@@ -3647,9 +3712,11 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     JS_CFUNC_DEF("seek", 3, js_os_seek ),
     JS_CFUNC_MAGIC_DEF("read", 4, js_os_read_write, 0 ),
     JS_CFUNC_MAGIC_DEF("write", 4, js_os_read_write, 1 ),
+#if !defined(__vita__)
     JS_CFUNC_DEF("isatty", 1, js_os_isatty ),
     JS_CFUNC_DEF("ttyGetWinSize", 1, js_os_ttyGetWinSize ),
     JS_CFUNC_DEF("ttySetRaw", 1, js_os_ttySetRaw ),
+#endif
     JS_CFUNC_DEF("remove", 1, js_os_remove ),
     JS_CFUNC_DEF("rename", 2, js_os_rename ),
     JS_CFUNC_MAGIC_DEF("setReadHandler", 2, js_os_setReadHandler, 0 ),
@@ -3700,9 +3767,11 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     JS_CFUNC_MAGIC_DEF("stat", 1, js_os_stat, 0 ),
     JS_CFUNC_DEF("utimes", 3, js_os_utimes ),
     JS_CFUNC_DEF("sleep", 1, js_os_sleep ),
+    JS_CFUNC_DEF("time", 1, js_os_time ),
     JS_CFUNC_DEF("realpath", 1, js_os_realpath ),
 #if !defined(_WIN32)
     JS_CFUNC_MAGIC_DEF("lstat", 1, js_os_stat, 1 ),
+#if !defined(__vita__)
     JS_CFUNC_DEF("symlink", 2, js_os_symlink ),
     JS_CFUNC_DEF("readlink", 1, js_os_readlink ),
     JS_CFUNC_DEF("exec", 1, js_os_exec ),
@@ -3712,6 +3781,7 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     JS_CFUNC_DEF("kill", 2, js_os_kill ),
     JS_CFUNC_DEF("dup", 1, js_os_dup ),
     JS_CFUNC_DEF("dup2", 2, js_os_dup2 ),
+#endif
 #endif
 };
 
@@ -3776,7 +3846,22 @@ static JSValue js_print(JSContext *ctx, JSValueConst this_val,
     int i;
     const char *str;
     size_t len;
-
+#if defined(__vita__) && defined(VITA_USE_DEBUGSCREEN)
+    for(i = 0; i < argc; i++) {
+        if (i != 0)
+            psvDebugScreenPuts(" ");
+        str = JS_ToCStringLen(ctx, &len, argv[i]);
+        if (!str)
+            return JS_EXCEPTION;
+        // VITODO: change this if it becomes too slow
+        char* buffer = malloc(len);
+        strncpy(buffer, str, len);
+        psvDebugScreenPuts(buffer);
+        free(buffer);
+        JS_FreeCString(ctx, str);
+    }
+    psvDebugScreenPuts("\n");
+#else
     for(i = 0; i < argc; i++) {
         if (i != 0)
             putchar(' ');
@@ -3787,6 +3872,7 @@ static JSValue js_print(JSContext *ctx, JSValueConst this_val,
         JS_FreeCString(ctx, str);
     }
     putchar('\n');
+#endif
     return JS_UNDEFINED;
 }
 

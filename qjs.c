@@ -34,12 +34,18 @@
 #include <time.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
+#elif defined (__vita__)
+#include <malloc.h>
+#include <vitasdk.h>
 #elif defined(__linux__)
 #include <malloc.h>
 #endif
 
 #include "cutils.h"
 #include "quickjs-libc.h"
+#if defined(__vita__)
+#include "quickjs-vitasdk.h"
+#endif
 
 extern const uint8_t qjsc_repl[];
 extern const uint32_t qjsc_repl_size;

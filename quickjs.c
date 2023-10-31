@@ -34,6 +34,9 @@
 #include <math.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
+#elif defined (__vita__)
+#include <malloc.h>
+#include <vitasdk.h>
 #elif defined(__linux__)
 #include <malloc.h>
 #elif defined(__FreeBSD__)
@@ -65,6 +68,17 @@
 #if !defined(_WIN32)
 /* define it if printf uses the RNDN rounding mode instead of RNDNA */
 #define CONFIG_PRINTF_RNDN
+#endif
+
+#if defined(__vita__)
+#define PATH_MAX 1024
+
+FILE* quickjs_stdout = NULL;
+FILE* quickjs_stderr = NULL;
+
+#define VITA_STDOUT_PATH "ux0:data/quickjs_stdout.txt"
+#define VITA_STDERR_PATH "ux0:data/quickjs_stderr.txt"
+
 #endif
 
 /* define to include Atomics.* operations which depend on the OS
@@ -1660,6 +1674,13 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
 
     rt->current_exception = JS_NULL;
 
+#if defined(__vita__)
+    if(!(quickjs_stdout = freopen(VITA_STDOUT_PATH, "w", stdout)))
+        goto fail;
+    if(!(quickjs_stderr = freopen(VITA_STDERR_PATH, "w", stderr)))
+        goto fail;
+#endif  
+
     return rt;
  fail:
     JS_FreeRuntime(rt);
@@ -1681,6 +1702,8 @@ static inline size_t js_def_malloc_usable_size(void *ptr)
 {
 #if defined(__APPLE__)
     return malloc_size(ptr);
+#elif defined(__vita__)
+    return malloc_usable_size(ptr);
 #elif defined(_WIN32)
     return _msize(ptr);
 #elif defined(EMSCRIPTEN)
@@ -2113,6 +2136,11 @@ void JS_FreeRuntime(JSRuntime *rt)
         JSMallocState ms = rt->malloc_state;
         rt->mf.js_free(&ms, rt);
     }
+
+#if defined(__vita__)
+    fclose(quickjs_stdout);
+    fclose(quickjs_stderr);
+#endif
 }
 
 JSContext *JS_NewContextRaw(JSRuntime *rt)
@@ -42023,7 +42051,9 @@ static int getTimezoneOffset(int64_t time) {
     return 0;
 #else
     time_t ti;
+#if !defined(__vita__)
     struct tm tm;
+#endif
 
     time /= 1000; /* convert to seconds */
     if (sizeof(time_t) == 4) {
@@ -42047,8 +42077,21 @@ static int getTimezoneOffset(int64_t time) {
         }
     }
     ti = time;
+#if defined(__vita__)
+    SceDateTime local_time_sce;
+    SceRtcTick local_tick_sce, utc_tick_sce;
+
+    sceRtcGetCurrentClockLocalTime(&local_time_sce);
+
+    sceRtcGetTick(&local_time_sce, &local_tick_sce);
+    sceRtcConvertLocalTimeToUtc(&local_tick_sce, &utc_tick_sce);
+
+    // Tick resolution is microseconds
+    return (int)((utc_tick_sce.tick - local_tick_sce.tick) / (1000000 * 60));
+#else
     localtime_r(&ti, &tm);
     return -tm.tm_gmtoff / 60;
+#endif
 #endif
 }
 

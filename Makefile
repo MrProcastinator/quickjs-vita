@@ -362,7 +362,7 @@ ifdef CONFIG_LTO
 	install -m644 libquickjs.lto.a "$(DESTDIR)$(prefix)/lib/quickjs"
 endif
 	mkdir -p "$(DESTDIR)$(prefix)/include/quickjs"
-	install -m644 quickjs.h quickjs-libc.h "$(DESTDIR)$(prefix)/include/quickjs"
+	install -m644 quickjs.h quickjs-libc.h quickjspp.hpp "$(DESTDIR)$(prefix)/include/quickjs"
 
 ###############################################################################
 # examples

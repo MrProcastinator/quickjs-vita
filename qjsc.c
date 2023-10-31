@@ -374,7 +374,7 @@ void help(void)
     exit(1);
 }
 
-#if defined(CONFIG_CC) && !defined(_WIN32)
+#if defined(CONFIG_CC) && !defined(_WIN32) && !defined(__vita__)
 
 int exec_cmd(char **argv)
 {
