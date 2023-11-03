@@ -53,6 +53,16 @@ typedef struct {
     const char *init_name;
 } FeatureEntry;
 
+typedef struct {
+    const char* file;
+    BOOL loaded;
+} bytecode_entry_t;
+
+typedef struct {
+    int size;
+    bytecode_entry_t entries[];
+} bytecode_list_t;
+
 static namelist_t cname_list;
 static namelist_t cmodule_list;
 static namelist_t init_module_list;
@@ -61,6 +71,7 @@ static FILE *outfile;
 static BOOL byte_swap;
 static BOOL dynamic_export;
 static const char *c_ident_prefix = "qjsc_";
+static bytecode_list_t* bytecode_entries;
 
 #define FE_ALL (-1)
 
@@ -123,6 +134,38 @@ namelist_entry_t *namelist_find(namelist_t *lp, const char *name)
             return e;
     }
     return NULL;
+}
+
+static bytecode_list_t* bytecode_entry_list_create(int argc, char** argv)
+{
+    bytecode_list_t* ret = (bytecode_list_t*)malloc(sizeof(bytecode_list_t) + sizeof(bytecode_entry_t) * argc);
+    if(ret == NULL) {
+        printf("Couldn't create bytecode entry list");
+        exit(1);
+    }
+    ret->size = argc;
+    for(int i = 0; i < argc; ++i) {
+        ret->entries[i].file = argv[i];
+        ret->entries[i].loaded = FALSE;
+    }
+    return ret;
+}
+
+static BOOL bytecode_entry_is_loaded(bytecode_list_t* list, const char* bytecode_file) {
+    for(int i = 0; i < list->size; ++i) {
+        if(!strcmp(list->entries[i].file, bytecode_file) && list->entries[i].loaded) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void bytecode_entry_mark_loaded(bytecode_list_t* list, const char* bytecode_file) {
+    for(int i = 0; i < list->size; ++i) {
+        if(!strcmp(list->entries[i].file, bytecode_file)) {
+            list->entries[i].loaded = TRUE;
+        }
+    }
 }
 
 static void get_c_name(char *buf, size_t buf_size, const char *file)
@@ -271,7 +314,10 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         if (namelist_find(&cname_list, cname)) {
             find_unique_cname(cname, sizeof(cname));
         }
-        output_object_code(ctx, outfile, func_val, cname, TRUE);
+        if(!bytecode_entry_is_loaded(bytecode_entries, module_name)) {
+            bytecode_entry_mark_loaded(bytecode_entries, module_name);
+            output_object_code(ctx, outfile, func_val, cname, TRUE);
+        }
         
         /* the module is already referenced, so we must free it */
         m = JS_VALUE_GET_PTR(func_val);
@@ -316,7 +362,11 @@ static void compile_file(JSContext *ctx, FILE *fo,
     } else {
         get_c_name(c_name, sizeof(c_name), filename);
     }
-    output_object_code(ctx, fo, obj, c_name, FALSE);
+
+    if(!bytecode_entry_is_loaded(bytecode_entries, filename)) {
+        bytecode_entry_mark_loaded(bytecode_entries, filename);
+        output_object_code(ctx, fo, obj, c_name, FALSE);
+    }
     JS_FreeValue(ctx, obj);
 }
 
@@ -628,6 +678,8 @@ int main(int argc, char **argv)
         exit(1);
     }
     outfile = fo;
+
+    bytecode_entries = bytecode_entry_list_create(argc - optind, argv + optind);
     
     rt = JS_NewRuntime();
     ctx = JS_NewContext(rt);
