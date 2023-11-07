@@ -1655,6 +1655,19 @@ public:
                 return *this;
             }
 
+            /** Add a static member or function to the last added constructor from constant.
+             * Example:
+             *  struct T {  }
+             *  module.class_<T>("T").contructor<>("T").static_fun("var", 1).static_fun("func", []() { return 42; }));
+             */
+            template <typename F>
+            class_registrar& static_fun(const char * name, F&& f)
+            {
+                assert(!JS_IsNull(ctor.v) && "You should call .constructor before .static_fun");
+                ctor[name] = std::forward<F>(f);
+                return *this;
+            }
+
             /** Add a static member or function to the last added constructor.
              * Example:
              *  struct T { static int var; static int func(); }
