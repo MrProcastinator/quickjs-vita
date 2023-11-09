@@ -156,6 +156,27 @@ struct js_traits<void>
     }
 };
 
+/** Conversion traits for float32/float (using float64).
+ * NOTE: could damage values if JS uses double precision data
+ */
+template <>
+struct js_traits<float>
+{
+    /// @throws exception
+    static float unwrap(JSContext * ctx, JSValueConst v)
+    {
+        double r;
+        if(JS_ToFloat64(ctx, &r, v))
+            throw exception{ctx};
+        return static_cast<float>(r);
+    }
+
+    static JSValue wrap(JSContext * ctx, float i) noexcept
+    {
+        return JS_NewFloat64(ctx, static_cast<double>(i));
+    }
+};
+
 /** Conversion traits for float64/double.
  */
 template <>
@@ -1530,6 +1551,7 @@ class Context
 {
 public:
     JSContext * ctx;
+    bool wrapper;
 
     /** Module wrapper
      * Workaround for lack of opaque pointer for module load function by keeping a list of modules in qjs::Context.
@@ -1538,7 +1560,9 @@ public:
     {
         friend class Context;
 
+    public:
         JSModuleDef * m;
+    private:
         JSContext * ctx;
         const char * name;
 
@@ -1770,7 +1794,7 @@ private:
 public:
     Context(Runtime& rt) : Context(rt.rt) {}
 
-    Context(JSRuntime * rt)
+    Context(JSRuntime * rt) : wrapper(false)
     {
         ctx = JS_NewContext(rt);
         if(!ctx)
@@ -1778,9 +1802,15 @@ public:
         init();
     }
 
-    Context(JSContext * ctx) : ctx{ctx}
+    Context(JSContext * ctx) : ctx{ctx}, wrapper(false)
     {
         init();
+    }
+
+    Context(JSContext * ctx, bool isWrapper) : ctx{ctx}, wrapper(isWrapper)
+    {
+        if(!isWrapper)
+            init();
     }
 
     // noncopyable
@@ -1788,8 +1818,10 @@ public:
 
     ~Context()
     {
-        modules.clear();
-        JS_FreeContext(ctx);
+        if(!wrapper) {
+            modules.clear();
+            JS_FreeContext(ctx);
+        }
     }
 
     /** Callback triggered when a Promise rejection won't ever be handled */
@@ -2043,7 +2075,6 @@ struct js_traits<std::vector<T>>
         return arr;
     }
 };
-
 
 template <typename U, typename V>
 struct js_traits<std::pair<U, V>>
