@@ -168,23 +168,28 @@ static void bytecode_entry_mark_loaded(bytecode_list_t* list, const char* byteco
     }
 }
 
-static void get_c_name(char *buf, size_t buf_size, const char *file)
+static void get_c_name2(char *buf, size_t buf_size, const char *file, BOOL include_full_path)
 {
     const char *p, *r;
     size_t len, i;
     int c;
     char *q;
     
-    p = strrchr(file, '/');
-    if (!p)
+    if(!include_full_path) {
+        p = strrchr(file, '/');
+        if (!p)
+            p = file;
+        else
+            p++;
+    } else {
         p = file;
-    else
-        p++;
+    }
     r = strrchr(p, '.');
     if (!r)
         len = strlen(p);
     else
         len = r - p;
+
     pstrcpy(buf, buf_size, c_ident_prefix);
     q = buf + strlen(buf);
     for(i = 0; i < len; i++) {
@@ -198,6 +203,16 @@ static void get_c_name(char *buf, size_t buf_size, const char *file)
             *q++ = c;
     }
     *q = '\0';
+}
+
+static inline void get_c_name(char *buf, size_t buf_size, const char *file)
+{
+    get_c_name2(buf, buf_size, file, FALSE);
+}
+
+static inline void get_c_name_full_path(char *buf, size_t buf_size, const char *file)
+{
+    get_c_name2(buf, buf_size, file, TRUE);
 }
 
 static void dump_hex(FILE *f, const uint8_t *buf, size_t len)
@@ -310,7 +325,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         js_free(ctx, buf);
         if (JS_IsException(func_val))
             return NULL;
-        get_c_name(cname, sizeof(cname), module_name);
+        get_c_name_full_path(cname, sizeof(cname), module_name);
         if (namelist_find(&cname_list, cname)) {
             find_unique_cname(cname, sizeof(cname));
         }
@@ -360,7 +375,7 @@ static void compile_file(JSContext *ctx, FILE *fo,
     if (c_name1) {
         pstrcpy(c_name, sizeof(c_name), c_name1);
     } else {
-        get_c_name(c_name, sizeof(c_name), filename);
+        get_c_name_full_path(c_name, sizeof(c_name), filename);
     }
 
     if(!bytecode_entry_is_loaded(bytecode_entries, filename)) {
@@ -387,6 +402,15 @@ static const char main_c_template2[] =
     "  return 0;\n"
     "}\n";
 
+static const char static_c_template1[] =
+    "JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name)\n"
+    "{\n"
+    ;
+
+static const char static_c_template2[] =
+    "  return NULL;\n"
+    "}\n";
+
 #define PROG_NAME "qjsc"
 
 void help(void)
@@ -397,6 +421,7 @@ void help(void)
            "options are:\n"
            "-c          only output bytecode in a C file\n"
            "-e          output main() and bytecode in a C file (default = executable output)\n"
+           "-s cname    output static ilbrary initialization function and bytecode in a C file (default = executable output)\n"
            "-o output   set the output filename\n"
            "-N cname    set the C name of the generated data\n"
            "-m          compile as Javascript module (default=autodetect)\n"
@@ -528,6 +553,7 @@ static int output_executable(const char *out_filename, const char *cfilename,
 typedef enum {
     OUTPUT_C,
     OUTPUT_C_MAIN,
+    OUTPUT_C_STATIC,
     OUTPUT_EXECUTABLE,
 } OutputTypeEnum;
 
@@ -536,6 +562,7 @@ int main(int argc, char **argv)
     int c, i, verbose;
     const char *out_filename, *cname;
     char cfilename[1024];
+    char sname[1024];
     FILE *fo;
     JSRuntime *rt;
     JSContext *ctx;
@@ -564,7 +591,7 @@ int main(int argc, char **argv)
     namelist_add(&cmodule_list, "os", "os", 0);
 
     for(;;) {
-        c = getopt(argc, argv, "ho:cN:f:mxevM:p:S:D:");
+        c = getopt(argc, argv, "ho:cs:N:f:mxevM:p:S:D:");
         if (c == -1)
             break;
         switch(c) {
@@ -578,6 +605,10 @@ int main(int argc, char **argv)
             break;
         case 'e':
             output_type = OUTPUT_C_MAIN;
+            break;
+        case 's':
+            output_type = OUTPUT_C_STATIC;
+            strncpy(sname, optarg, sizeof(sname));
             break;
         case 'N':
             cname = optarg;
@@ -625,7 +656,7 @@ int main(int argc, char **argv)
                     *p = '\0';
                     pstrcpy(cname, sizeof(cname), p + 1);
                 } else {
-                    get_c_name(cname, sizeof(cname), path);
+                    get_c_name_full_path(cname, sizeof(cname), path);
                 }
                 namelist_add(&cmodule_list, path, cname, 0);
             }
@@ -724,69 +755,101 @@ int main(int argc, char **argv)
     }
     
     if (output_type != OUTPUT_C) {
-        fprintf(fo,
-                "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
-                "{\n"
-                "  JSContext *ctx = JS_NewContextRaw(rt);\n"
-                "  if (!ctx)\n"
-                "    return NULL;\n");
-        /* add the basic objects */
-        fprintf(fo, "  JS_AddIntrinsicBaseObjects(ctx);\n");
-        for(i = 0; i < countof(feature_list); i++) {
-            if ((feature_bitmap & ((uint64_t)1 << i)) &&
-                feature_list[i].init_name) {
-                fprintf(fo, "  JS_AddIntrinsic%s(ctx);\n",
-                        feature_list[i].init_name);
+        if(output_type != OUTPUT_C_STATIC) {
+            fprintf(fo,
+                    "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
+                    "{\n"
+                    "  JSContext *ctx = JS_NewContextRaw(rt);\n"
+                    "  if (!ctx)\n"
+                    "    return NULL;\n");
+            /* add the basic objects */
+            fprintf(fo, "  JS_AddIntrinsicBaseObjects(ctx);\n");
+            for(i = 0; i < countof(feature_list); i++) {
+                if ((feature_bitmap & ((uint64_t)1 << i)) &&
+                    feature_list[i].init_name) {
+                    fprintf(fo, "  JS_AddIntrinsic%s(ctx);\n",
+                            feature_list[i].init_name);
+                }
             }
-        }
 #ifdef CONFIG_BIGNUM
-        if (bignum_ext) {
-            fprintf(fo,
-                    "  JS_AddIntrinsicBigFloat(ctx);\n"
-                    "  JS_AddIntrinsicBigDecimal(ctx);\n"
-                    "  JS_AddIntrinsicOperators(ctx);\n"
-                    "  JS_EnableBignumExt(ctx, 1);\n");
-        }
+            if (bignum_ext) {
+                fprintf(fo,
+                        "  JS_AddIntrinsicBigFloat(ctx);\n"
+                        "  JS_AddIntrinsicBigDecimal(ctx);\n"
+                        "  JS_AddIntrinsicOperators(ctx);\n"
+                        "  JS_EnableBignumExt(ctx, 1);\n");
+            }
 #endif
-        /* add the precompiled modules (XXX: could modify the module
-           loader instead) */
-        for(i = 0; i < init_module_list.count; i++) {
-            namelist_entry_t *e = &init_module_list.array[i];
-            /* initialize the static C modules */
-            
+            /* add the precompiled modules (XXX: could modify the module
+            loader instead) */
+            for(i = 0; i < init_module_list.count; i++) {
+                namelist_entry_t *e = &init_module_list.array[i];
+                /* initialize the static C modules */
+
+                fprintf(fo,
+                        "  {\n"
+                        "    extern JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name);\n"
+                        "    js_init_module_%s(ctx, \"%s\");\n"
+                        "  }\n",
+                        e->short_name, e->short_name, e->name);
+            }
+            for(i = 0; i < cname_list.count; i++) {
+                namelist_entry_t *e = &cname_list.array[i];
+                if (e->flags) {
+                    fprintf(fo, "  js_std_eval_binary(ctx, %s, %s_size, 1);\n",
+                            e->name, e->name);
+                }
+            }
             fprintf(fo,
-                    "  {\n"
-                    "    extern JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name);\n"
-                    "    js_init_module_%s(ctx, \"%s\");\n"
-                    "  }\n",
-                    e->short_name, e->short_name, e->name);
+                    "  return ctx;\n"
+                    "}\n\n");
         }
-        for(i = 0; i < cname_list.count; i++) {
-            namelist_entry_t *e = &cname_list.array[i];
-            if (e->flags) {
-                fprintf(fo, "  js_std_eval_binary(ctx, %s, %s_size, 1);\n",
-                        e->name, e->name);
+        if(output_type == OUTPUT_C_STATIC) {
+            char cname[1024];
+            get_c_name_full_path(cname, sizeof(cname), sname);
+            fprintf(fo, static_c_template1, cname);
+        } else {
+            fputs(main_c_template1, fo);
+        }
+
+        if(output_type != OUTPUT_C_STATIC) {
+            if (stack_size != 0) {
+                fprintf(fo, "  JS_SetMaxStackSize(rt, %u);\n",
+                        (unsigned int)stack_size);
+            }
+            
+            /* add the module loader if necessary */
+            if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
+                fprintf(fo, "  JS_SetModuleLoaderFunc(rt, NULL, js_module_loader, NULL);\n");
+            }
+            fprintf(fo,
+                    "  ctx = JS_NewCustomContext(rt);\n"
+                    "  js_std_add_helpers(ctx, argc, argv);\n");
+        }
+
+        if(output_type == OUTPUT_C_STATIC) {
+            /* add the precompiled modules (XXX: could modify the module
+            loader instead) */
+            for(i = 0; i < init_module_list.count; i++) {
+                namelist_entry_t *e = &init_module_list.array[i];
+                /* initialize the static C modules */
+
+                fprintf(fo,
+                        "  {\n"
+                        "    extern JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name);\n"
+                        "    js_init_module_%s(ctx, \"%s\");\n"
+                        "  }\n",
+                        e->short_name, e->short_name, e->name);
+            }
+
+            for(i = 0; i < cname_list.count; i++) {
+                namelist_entry_t *e = &cname_list.array[i];
+                if (e->flags) {
+                    fprintf(fo, "  js_std_eval_binary(ctx, %s, %s_size, 1);\n",
+                            e->name, e->name);
+                }
             }
         }
-        fprintf(fo,
-                "  return ctx;\n"
-                "}\n\n");
-        
-        fputs(main_c_template1, fo);
-
-        if (stack_size != 0) {
-            fprintf(fo, "  JS_SetMaxStackSize(rt, %u);\n",
-                    (unsigned int)stack_size);
-        }
-        
-        /* add the module loader if necessary */
-        if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
-            fprintf(fo, "  JS_SetModuleLoaderFunc(rt, NULL, js_module_loader, NULL);\n");
-        }
-        
-        fprintf(fo,
-                "  ctx = JS_NewCustomContext(rt);\n"
-                "  js_std_add_helpers(ctx, argc, argv);\n");
 
         for(i = 0; i < cname_list.count; i++) {
             namelist_entry_t *e = &cname_list.array[i];
@@ -795,7 +858,11 @@ int main(int argc, char **argv)
                         e->name, e->name);
             }
         }
-        fputs(main_c_template2, fo);
+        if(output_type == OUTPUT_C_STATIC) {
+            fputs(static_c_template2, fo);
+        } else {
+            fputs(main_c_template2, fo);
+        }
     }
     
     JS_FreeContext(ctx);
