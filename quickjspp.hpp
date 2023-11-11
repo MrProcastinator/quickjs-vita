@@ -1544,14 +1544,17 @@ inline std::string toUri(std::string_view filename) {
 
 }
 
+class ContextContainer;
+
 /** Wrapper over JSContext * ctx
  * Calls JS_SetContextOpaque(ctx, this); on construction and JS_FreeContext on destruction
  */
 class Context
 {
+    friend class ContextContainer;
 public:
     JSContext * ctx;
-    bool wrapper;
+    bool contained;
 
     /** Module wrapper
      * Workaround for lack of opaque pointer for module load function by keeping a list of modules in qjs::Context.
@@ -1794,7 +1797,7 @@ private:
 public:
     Context(Runtime& rt) : Context(rt.rt) {}
 
-    Context(JSRuntime * rt) : wrapper(false)
+    Context(JSRuntime * rt) : contained(false)
     {
         ctx = JS_NewContext(rt);
         if(!ctx)
@@ -1802,23 +1805,26 @@ public:
         init();
     }
 
-    Context(JSContext * ctx) : ctx{ctx}, wrapper(false)
+    Context(JSContext * ctx) : ctx{ctx}, contained(false)
     {
         init();
-    }
-
-    Context(JSContext * ctx, bool isWrapper) : ctx{ctx}, wrapper(isWrapper)
-    {
-        if(!isWrapper)
-            init();
     }
 
     // noncopyable
     Context(const Context&) = delete;
 
+private:
+    Context() : ctx(NULL), contained(true) {}
+
+    void contain(JSContext* ctx) {
+        this->ctx = ctx;
+        init();
+    }
+
+public:
     ~Context()
     {
-        if(!wrapper) {
+        if(!contained) {
             modules.clear();
             JS_FreeContext(ctx);
         }
@@ -1906,6 +1912,23 @@ public:
         void * ptr = JS_GetContextOpaque(ctx);
         assert(ptr);
         return *static_cast<Context *>(ptr);
+    }
+};
+
+/** Class to handle contexts which are created in C code, but don't need to be released, necessary for long lived Context instances */
+class ContextContainer
+{
+private:
+    Context contained;
+
+public:
+    ContextContainer() : contained() {
+
+    }
+
+    Context& contain(JSContext* ctx) {
+        contained.contain(ctx);
+        return contained;
     }
 };
 
