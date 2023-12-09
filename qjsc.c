@@ -40,6 +40,7 @@ typedef struct {
     char *name;
     char *short_name;
     int flags;
+    int weak;
 } namelist_entry_t;
 
 typedef struct namelist_t {
@@ -93,7 +94,7 @@ static const FeatureEntry feature_list[] = {
 };
 
 void namelist_add(namelist_t *lp, const char *name, const char *short_name,
-                  int flags)
+                  int flags, int is_weak_import)
 {
     namelist_entry_t *e;
     if (lp->count == lp->size) {
@@ -111,6 +112,7 @@ void namelist_add(namelist_t *lp, const char *name, const char *short_name,
     else
         e->short_name = NULL;
     e->flags = flags;
+    e->weak = is_weak_import;
 }
 
 void namelist_free(namelist_t *lp)
@@ -246,7 +248,7 @@ static void output_object_code(JSContext *ctx,
         exit(1);
     }
 
-    namelist_add(&cname_list, c_name, NULL, load_only);
+    namelist_add(&cname_list, c_name, NULL, load_only, FALSE);
     
     fprintf(fo, "const uint32_t %s_size = %u;\n\n", 
             c_name, (unsigned int)out_buf_len);
@@ -296,7 +298,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
     e = namelist_find(&cmodule_list, module_name);
     if (e) {
         /* add in the static init module list */
-        namelist_add(&init_module_list, e->name, e->short_name, 0);
+        namelist_add(&init_module_list, e->name, e->short_name, 0, e->weak);
         /* create a dummy module */
         m = JS_NewCModule(ctx, module_name, js_module_dummy_init);
     } else if (has_suffix(module_name, ".so")) {
@@ -427,6 +429,7 @@ void help(void)
            "-m          compile as Javascript module (default=autodetect)\n"
            "-D module_name         compile a dynamically loaded module or worker\n"
            "-M module_name[,cname] add initialization code for an external C module\n"
+           "-W module_name[,cname] add external c module without creating initialization code\n"
            "-x          byte swapped output\n"
            "-p prefix   set the prefix of the generated C names\n"
            "-S n        set the maximum stack size to 'n' bytes (default=%d)\n",
@@ -587,11 +590,11 @@ int main(int argc, char **argv)
     memset(&dynamic_module_list, 0, sizeof(dynamic_module_list));
     
     /* add system modules */
-    namelist_add(&cmodule_list, "std", "std", 0);
-    namelist_add(&cmodule_list, "os", "os", 0);
+    namelist_add(&cmodule_list, "std", "std", 0, TRUE);
+    namelist_add(&cmodule_list, "os", "os", 0, TRUE);
 
     for(;;) {
-        c = getopt(argc, argv, "ho:cs:N:f:mxevM:p:S:D:");
+        c = getopt(argc, argv, "ho:cs:N:f:mxevM:W:p:S:D:");
         if (c == -1)
             break;
         switch(c) {
@@ -658,11 +661,27 @@ int main(int argc, char **argv)
                 } else {
                     get_c_name_full_path(cname, sizeof(cname), path);
                 }
-                namelist_add(&cmodule_list, path, cname, 0);
+                namelist_add(&cmodule_list, path, cname, 0, FALSE);
+            }
+            break;
+        case 'W':
+            {
+                char *p;
+                char path[1024];
+                char cname[1024];
+                pstrcpy(path, sizeof(path), optarg);
+                p = strchr(path, ',');
+                if (p) {
+                    *p = '\0';
+                    pstrcpy(cname, sizeof(cname), p + 1);
+                } else {
+                    get_c_name_full_path(cname, sizeof(cname), path);
+                }
+                namelist_add(&cmodule_list, path, cname, 0, TRUE);
             }
             break;
         case 'D':
-            namelist_add(&dynamic_module_list, optarg, NULL, 0);
+            namelist_add(&dynamic_module_list, optarg, NULL, 0, FALSE);
             break;
         case 'x':
             byte_swap = TRUE;
@@ -785,13 +804,14 @@ int main(int argc, char **argv)
             for(i = 0; i < init_module_list.count; i++) {
                 namelist_entry_t *e = &init_module_list.array[i];
                 /* initialize the static C modules */
-
-                fprintf(fo,
+                if(!e->weak) {
+                    fprintf(fo,
                         "  {\n"
                         "    extern JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name);\n"
                         "    js_init_module_%s(ctx, \"%s\");\n"
                         "  }\n",
                         e->short_name, e->short_name, e->name);
+                }
             }
             for(i = 0; i < cname_list.count; i++) {
                 namelist_entry_t *e = &cname_list.array[i];
@@ -833,13 +853,14 @@ int main(int argc, char **argv)
             for(i = 0; i < init_module_list.count; i++) {
                 namelist_entry_t *e = &init_module_list.array[i];
                 /* initialize the static C modules */
-
-                fprintf(fo,
-                        "  {\n"
-                        "    extern JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name);\n"
-                        "    js_init_module_%s(ctx, \"%s\");\n"
-                        "  }\n",
-                        e->short_name, e->short_name, e->name);
+                if(!e->weak) {
+                    fprintf(fo,
+                            "  {\n"
+                            "    extern JSModuleDef *js_init_module_%s(JSContext *ctx, const char *name);\n"
+                            "    js_init_module_%s(ctx, \"%s\");\n"
+                            "  }\n",
+                            e->short_name, e->short_name, e->name);
+                }
             }
 
             for(i = 0; i < cname_list.count; i++) {
