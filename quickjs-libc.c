@@ -2376,6 +2376,7 @@ static int js_os_poll(JSContext *ctx)
                 if (th->interval > 0) {
                     th->timeout = cur_time + th->interval;
                     call_handler(ctx, func);
+                    min_delay = th->interval;
                 } else {
                     th->func = JS_UNDEFINED;
                     unlink_timer(rt, th);
@@ -2752,6 +2753,23 @@ static JSValue js_os_time(JSContext *ctx, JSValueConst this_val,
     time_t seconds;
     seconds = time(NULL);
     return JS_NewInt32(ctx, seconds);
+}
+
+/* tick() */
+static JSValue js_os_tick(JSContext *ctx, JSValueConst this_val,
+                          int argc, JSValueConst *argv)
+{
+    int64_t ticks = 0;
+#if defined(__VITA__)
+    SceRtcTick _ticks;
+    sceRtcGetCurrentTick(&_ticks);
+    ticks = (int64_t)_ticks.tick;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    ticks = (int64_t)((uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL);
+#endif
+    return JS_NewInt64(ctx, ticks);
 }
 
 #if defined(_WIN32)
@@ -3768,6 +3786,7 @@ static const JSCFunctionListEntry js_os_funcs[] = {
     JS_CFUNC_DEF("utimes", 3, js_os_utimes ),
     JS_CFUNC_DEF("sleep", 1, js_os_sleep ),
     JS_CFUNC_DEF("time", 1, js_os_time ),
+    JS_CFUNC_DEF("tick", 1, js_os_tick ),
     JS_CFUNC_DEF("realpath", 1, js_os_realpath ),
 #if !defined(_WIN32)
     JS_CFUNC_MAGIC_DEF("lstat", 1, js_os_stat, 1 ),
