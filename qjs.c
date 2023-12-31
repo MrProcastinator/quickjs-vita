@@ -55,6 +55,97 @@ extern const uint32_t qjsc_qjscalc_size;
 static int bignum_ext;
 #endif
 
+#if defined(ALLOW_STATIC_MODULES)
+
+#include <dlfcn.h>
+
+typedef JSModuleDef* (*JSModuleInitFunction)(JSContext*, const char*);
+
+static char* static_symbols[256];
+
+static const char *c_ident_prefix = "qjsc_";
+
+static void get_c_name2(char *buf, size_t buf_size, const char *file, BOOL include_full_path)
+{
+    const char *p, *r;
+    size_t len, i;
+    int c;
+    char *q;
+
+    if(!include_full_path) {
+        p = strrchr(file, '/');
+        if (!p)
+            p = file;
+        else
+            p++;
+    } else {
+        p = file;
+    }
+    r = strrchr(p, '.');
+    if (!r)
+        len = strlen(p);
+    else
+        len = r - p;
+
+    pstrcpy(buf, buf_size, c_ident_prefix);
+    q = buf + strlen(buf);
+    for(i = 0; i < len; i++) {
+        c = p[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z'))) {
+            c = '_';
+        }
+        if ((q - buf) < buf_size - 1)
+            *q++ = c;
+    }
+    *q = '\0';
+}
+
+static inline void to_library_path(const char* symbol, char* c_path)
+{
+    char* comma = strchr(symbol, ',');
+    if(!comma) {
+        snprintf(c_path, 1024, "%s", symbol);
+    } else {
+        snprintf(c_path, 1024, "%s", comma + 1);
+    }
+}
+
+static inline void to_library_name(const char* symbol, char* c_symbol)
+{
+    char* comma = strchr(symbol, ',');
+    char c_name[1024];
+    if(!comma) {
+        get_c_name2(c_name, 1024, symbol, TRUE);
+        snprintf(c_symbol, 1024, "js_init_module_qjsc_quickjs_%s", c_name);
+    } else {
+        *comma = '\0';
+        get_c_name2(c_name, 1024, symbol, TRUE);
+        snprintf(c_symbol, 1024, "js_init_module_%s", c_name);
+    }
+}
+
+static void js_init_static_modules(JSContext* ctx)
+{
+    char c_symbol[1024];
+    char c_path[1024];
+    void* static_library = dlopen(NULL, RTLD_NOW);
+    char** symbol = static_symbols;
+    while(*symbol) {
+        to_library_path(*symbol, c_path);
+        to_library_name(*symbol, c_symbol);
+        JSModuleInitFunction init = dlsym(static_library, c_symbol);
+        if(init) {
+            (*init)(ctx, c_path);
+        } else {
+            printf("Warning: no symbol '%s' found.\n", c_symbol);
+        }
+        symbol++;
+    }
+}
+#endif
+
 static int eval_buf(JSContext *ctx, const void *buf, int buf_len,
                     const char *filename, int eval_flags)
 {
@@ -126,6 +217,7 @@ static JSContext *JS_NewCustomContext(JSRuntime *rt)
     /* system modules */
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
+
     return ctx;
 }
 
@@ -290,21 +382,22 @@ void help(void)
 {
     printf("QuickJS version " CONFIG_VERSION "\n"
            "usage: " PROG_NAME " [options] [file [args]]\n"
-           "-h  --help         list options\n"
-           "-e  --eval EXPR    evaluate EXPR\n"
-           "-i  --interactive  go to interactive mode\n"
-           "-m  --module       load as ES6 module (default=autodetect)\n"
-           "    --script       load as ES6 script (default=autodetect)\n"
-           "-I  --include file include an additional file\n"
-           "    --std          make 'std' and 'os' available to the loaded script\n"
+           "-h  --help            list options\n"
+           "-e  --eval EXPR       evaluate EXPR\n"
+           "-i  --interactive     go to interactive mode\n"
+           "-m  --module          load as ES6 module (default=autodetect)\n"
+           "    --script          load as ES6 script (default=autodetect)\n"
+           "-S  --static lib,path load a statically linked library into the runtime\n"
+           "-I  --include file    include an additional file\n"
+           "    --std             make 'std' and 'os' available to the loaded script\n"
 #ifdef CONFIG_BIGNUM
-           "    --bignum       enable the bignum extensions (BigFloat, BigDecimal)\n"
-           "    --qjscalc      load the QJSCalc runtime (default if invoked as qjscalc)\n"
+           "    --bignum          enable the bignum extensions (BigFloat, BigDecimal)\n"
+           "    --qjscalc         load the QJSCalc runtime (default if invoked as qjscalc)\n"
 #endif
-           "-T  --trace        trace memory allocation\n"
-           "-d  --dump         dump the memory usage stats\n"
-           "    --memory-limit n       limit the memory usage to 'n' bytes\n"
-           "    --stack-size n         limit the stack size to 'n' bytes\n"
+           "-T  --trace           trace memory allocation\n"
+           "-d  --dump            dump the memory usage stats\n"
+           "    --memory-limit n  limit the memory usage to 'n' bytes\n"
+           "    --stack-size n    limit the stack size to 'n' bytes\n"
            "    --unhandled-rejection  dump unhandled promise rejections\n"
            "-q  --quit         just instantiate the interpreter and quit\n");
     exit(1);
@@ -327,6 +420,7 @@ int main(int argc, char **argv)
     size_t memory_limit = 0;
     char *include_list[32];
     int i, include_count = 0;
+    int static_symbols_length = 0;
 #ifdef CONFIG_BIGNUM
     int load_jscalc;
 #endif
@@ -413,6 +507,16 @@ int main(int argc, char **argv)
                 trace_memory++;
                 continue;
             }
+#ifdef ALLOW_STATIC_MODULES
+            if (opt == 'S' || !strcmp(longopt, "static")) {
+                if (optind >= argc) {
+                    fprintf(stderr, "expecting library name");
+                    exit(1);
+                }
+                static_symbols[static_symbols_length++] = argv[optind++];
+                continue;
+            }
+#endif
             if (!strcmp(longopt, "std")) {
                 load_std = 1;
                 continue;
@@ -500,6 +604,10 @@ int main(int argc, char **argv)
         }
 #endif
         js_std_add_helpers(ctx, argc - optind, argv + optind);
+
+#ifdef ALLOW_STATIC_MODULES
+        js_init_static_modules(ctx);
+#endif
 
         /* make 'std' and 'os' visible to non module code */
         if (load_std) {
