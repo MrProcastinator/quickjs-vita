@@ -1865,7 +1865,12 @@ private:
     Context() : ctx(NULL), contained(true) {}
 
     void contain(JSContext* ctx) {
+        assert(ctx);
         this->ctx = ctx;
+        /* In case this is a C context contained for the first time */
+        if(!JS_GetContextOpaque(ctx)) {
+            JS_SetContextOpaque(ctx, this);
+        }
         init();
     }
 
