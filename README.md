@@ -63,8 +63,9 @@ This should install the following elements:
 Run the following commands:
 
 ``` bash
-make CONFIG_WIN32=y # Use CONFIG_M32=y to compile to 32-bit binaries
-sudo make install CONFIG_WIN32=y
+# Use make clean if you've already compiled for other architecture
+make CONFIG_VITA=y # Use CONFIG_VITA=y to compile to PSVita static library
+sudo make install CONFIG_VITA=y VITASDK=$VITASDK # Make sure you have set your $VITASDK bash variable correctly
 ```
 
 This should install the following elements:
